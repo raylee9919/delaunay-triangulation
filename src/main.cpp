@@ -24,143 +24,12 @@
 #include "scope_exit.h"
 #include "intrinsics.h"
 #include "math.h"
+#include "os.h"
 #include "geo.h"
-
-#define __DEBUG 1
-#if __DEBUG
-#  define LOG printf
-#else
-#  define LOG
-#endif
+#include "gl.h"
 
 #define WINDOW_WIDTH    1000
 #define WINDOW_HEIGHT   1000
-
-const char *g_shader_header = 
-#include "shader/header.glsl"
-
-void gl_framebuffer_resize_callback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
-}  
-
-GLuint glcreateshader(const char *vsrc, const char *fsrc) {
-    GLuint program = 0;
-
-    if (glCreateShader) {
-        GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
-        const GLchar *vunit[] = { g_shader_header, vsrc };
-        glShaderSource(vshader, arraycount(vunit), (const GLchar **)vunit, 0);
-        glCompileShader(vshader);
-
-        GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
-        const GLchar *funit[] = { g_shader_header, fsrc };
-        glShaderSource(fshader, arraycount(funit), (const GLchar **)funit, 0);
-        glCompileShader(fshader);
-
-        program = glCreateProgram();
-        glAttachShader(program, vshader);
-        glAttachShader(program, fshader);
-        glLinkProgram(program);
-
-        glValidateProgram(program);
-        GLint linked = false;
-        glGetProgramiv(program, GL_LINK_STATUS, &linked);
-        if (!linked) {
-            GLsizei stub;
-
-            GLchar vlog[1024];
-            glGetShaderInfoLog(vshader, sizeof(vlog), &stub, vlog);
-
-            GLchar flog[1024];
-            glGetShaderInfoLog(fshader, sizeof(flog), &stub, flog);
-
-            GLchar plog[1024];
-            glGetProgramInfoLog(program, sizeof(plog), &stub, plog);
-
-            ASSERT(!"compile/link error.");
-        }
-
-        glDeleteShader(vshader);
-        glDeleteShader(fshader);
-    } else {
-        // @TODO: Error-Handling.
-    }
-    
-    return program;
-}
-
-GLuint glcreateshader(const char *vsrc, const char *gsrc, const char *fsrc) {
-    GLuint program = 0;
-
-    if (glCreateShader) 
-    {
-        GLuint vshader = glCreateShader(GL_VERTEX_SHADER);
-        const GLchar *vunit[] = { g_shader_header, vsrc };
-        glShaderSource(vshader, arraycount(vunit), (const GLchar **)vunit, 0);
-        glCompileShader(vshader);
-
-        GLuint gshader = glCreateShader(GL_GEOMETRY_SHADER);
-        const GLchar *gunit[] = { g_shader_header, gsrc };
-        glShaderSource(gshader, arraycount(gunit), (const GLchar **)gunit, 0);
-        glCompileShader(gshader);
-
-        GLuint fshader = glCreateShader(GL_FRAGMENT_SHADER);
-        const GLchar *funit[] = { g_shader_header, fsrc };
-        glShaderSource(fshader, arraycount(funit), (const GLchar **)funit, 0);
-        glCompileShader(fshader);
-
-        program = glCreateProgram();
-        glAttachShader(program, vshader);
-        glAttachShader(program, gshader);
-        glAttachShader(program, fshader);
-        glLinkProgram(program);
-
-        glValidateProgram(program);
-        GLint linked = false;
-        glGetProgramiv(program, GL_LINK_STATUS, &linked);
-        if (!linked) 
-        {
-            GLsizei stub;
-
-            GLchar vlog[1024];
-            glGetShaderInfoLog(vshader, sizeof(vlog), &stub, vlog);
-
-            GLchar glog[1024];
-            glGetShaderInfoLog(gshader, sizeof(glog), &stub, glog);
-
-            GLchar flog[1024];
-            glGetShaderInfoLog(fshader, sizeof(flog), &stub, flog);
-
-            GLchar plog[1024];
-            glGetProgramInfoLog(program, sizeof(plog), &stub, plog);
-
-            ASSERT(!"compile/link error.");
-        }
-
-        glDeleteShader(vshader);
-        glDeleteShader(gshader);
-        glDeleteShader(fshader);
-    } else {
-        // @TODO: Error-Handling.
-    }
-    
-    return program;
-}
-
-void glclearcolor(v4 color) {
-    glClearColor(color.r, color.g, color.b, color.a);
-    glClear(GL_COLOR_BUFFER_BIT);
-}
-
-void *os_alloc(size_t size) {
-    void *result = VirtualAlloc(0, size, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
-    ASSERT(result);
-    return result;
-}
-
-void os_free(void *memory) {
-    if (memory) VirtualFree(memory, 0, MEM_RELEASE);
-}
 
 void swap_vertex(Vertex *a, Vertex *b) {
     Vertex tmp = *a;
@@ -175,7 +44,7 @@ void swap_u32(u32 *a, u32 *b) {
 }
 
 u32 partition_colinear(u32 *colinear, u32 lo, u32 hi, Vertex *vertices, Vertex anchor) {
-    unsigned int j, k = lo;
+    u32 j, k = lo;
 
     for (j = lo + 1; j < hi; j++) {
         if (distance(anchor.position, vertices[colinear[j]].position) - distance(anchor.position, vertices[colinear[lo]].position) <= 0) {
@@ -283,7 +152,34 @@ Vertex_Array jarvismarch(Vertex *vertices_, u32 vertexcount_) {
     return hull;
 }
 
-void generate_vertices(Vertex *vertices, unsigned int count) {
+Vertex_Array triangulate_convex_hull(Vertex_Array *convexhull) {
+    u32 trianglecount = convexhull->count - 2;
+    Vertex_Array result;
+    result.count = 0;
+    result.vertices = (Vertex *)os_alloc(3*sizeof(Vertex)*trianglecount);
+
+	for (u32 i = 2; i < convexhull->count; i++) {
+		Vertex a = convexhull->vertices[0];
+		Vertex b = convexhull->vertices[i - 1];
+		Vertex c = convexhull->vertices[i];
+
+		result.vertices[result.count++] = a;
+		result.vertices[result.count++] = b;
+		result.vertices[result.count++] = c;
+	}
+
+    ASSERT(trianglecount*3 == result.count);
+    return result;
+}
+
+void delaunay_triangulate() {
+
+}
+
+/*
+ * Scene
+ */
+void generate_vertices(Vertex *vertices, u32 count) {
     time_t t;
     time(&t);
     srand((u32)t);
@@ -299,9 +195,11 @@ void generate_vertices(Vertex *vertices, unsigned int count) {
     }
 }
 
-void restart(Vertex *vertices, unsigned int count, Vertex_Array *hull) {
+void restart(Vertex *vertices, u32 count, Vertex_Array *convexhull, Vertex_Array *triangulatedconvexhull) {
     generate_vertices(vertices, count);
-    *hull = jarvismarch(vertices, count);
+    *convexhull = jarvismarch(vertices, count);
+
+    *triangulatedconvexhull = triangulate_convex_hull(convexhull);
 }
 
 int main() {
@@ -366,12 +264,16 @@ int main() {
     u32 vertexcount = 16;
     Vertex *vertices = (Vertex *)os_alloc(sizeof(Vertex)*vertexcount);
     Vertex_Array hull;
-    restart(vertices, vertexcount, &hull);
+    Vertex_Array triangulated;
+    restart(vertices, vertexcount, &hull, &triangulated);
 
     {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
     }
+
+    bool drawconvexhull = false;
+    bool drawtriangulatedconvexhull = false;
 
     while (!glfwWindowShouldClose(window)) 
     {
@@ -385,10 +287,12 @@ int main() {
 
         {
             ImGui::Begin("Control");
+            ImGui::Checkbox("Draw Convex Hull", &drawconvexhull);
+            ImGui::Checkbox("Draw Triangulated Convex Hull", &drawtriangulatedconvexhull);
             if (ImGui::Button("Restart")) {
                 os_free(vertices);
                 vertices = (Vertex *)os_alloc(sizeof(Vertex) * vertexcount);
-                restart(vertices, vertexcount, &hull);
+                restart(vertices, vertexcount, &hull, &triangulated);
             }
             ImGui::End();
         }
@@ -408,12 +312,23 @@ int main() {
             glDisableVertexAttribArray(0);
         }
 
-        {
+        if (drawconvexhull) {
             glUseProgram(simpleshader);
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, hull.count * sizeof(Vertex), hull.vertices, GL_DYNAMIC_DRAW);
             glDrawArrays(GL_LINE_LOOP, 0, hull.count);
+            glDisableVertexAttribArray(0);
+        }
+
+        if (drawtriangulatedconvexhull) {
+            glUseProgram(simpleshader);
+            glEnableVertexAttribArray(0);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
+            glBufferData(GL_ARRAY_BUFFER, triangulated.count * sizeof(Vertex), triangulated.vertices, GL_DYNAMIC_DRAW);
+            glDrawArrays(GL_TRIANGLES, 0, triangulated.count);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisableVertexAttribArray(0);
         }
 

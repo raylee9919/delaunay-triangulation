@@ -9,7 +9,7 @@ void main()
 {
     gP = vP.xz;
     gcenter = vP.xz;
-    gl_Position = v4(vP.xz, 0, 1);
+    gl_Position = v4(vP.xz, -1, 1);
 }
 
 )";
