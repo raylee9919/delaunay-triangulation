@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <time.h>
+#include <math.h>
 
 #include "vendor/glad/glad.h"
 #include "vendor/GLFW/glfw3.h"
@@ -172,8 +173,168 @@ Vertex_Array triangulate_convex_hull(Vertex_Array *convexhull) {
     return result;
 }
 
-void delaunay_triangulate() {
+int get_bin(Vertex vertex, int ndiv) {
+    f32 x = vertex.position.x;
+    f32 z = vertex.position.z;
+    int i = int(z*ndiv*0.999f);
+    int j = int(x*ndiv*0.999f);
+    int bin = (i % 2 == 0) ? i*ndiv+j+1 : (i+1)*ndiv-j;
+    return bin;
+}
 
+u32 partition_bin(Vertex *vertices, u32 lo, u32 hi, int ndiv) {
+    u32 j, k = lo;
+
+    for (j = lo + 1; j < hi; j++) {
+        if (get_bin(vertices[j], ndiv) - get_bin(vertices[lo], ndiv) <= 0) {
+            k++;
+            swap_vertex(vertices + k, vertices + j);
+        }
+    }
+
+    swap_vertex(vertices + lo, vertices + k);
+    return k;
+}
+
+void quicksort_bin(Vertex *vertices, u32 lo, u32 hi, int ndiv) {
+    if (hi > lo + 1) {
+        u32 mid = partition_bin(vertices, lo, hi, ndiv);
+        quicksort_bin(vertices, lo, mid, ndiv);
+        quicksort_bin(vertices, mid + 1, hi, ndiv);
+    }
+}
+
+// @TODO: Correctness.
+bool point_in_triangle(v2 p, v2 a, v2 b, v2 c) {
+    v2 ab = b - a;
+    v2 bc = c - b;
+    v2 ca = a - c;
+    v2 ap = p - a;
+    v2 bp = p - b;
+    v2 cp = p - c;
+
+    v2 n1 = v2{ab.y, -ab.x};
+    v2 n2 = v2{bc.y, -bc.x};
+    v2 n3 = v2{ca.y, -ca.x};
+
+    f32 s1 = ap.x*n1.x + ap.y*n1.y;
+    f32 s2 = bp.x*n2.x + bp.y*n2.y;
+    f32 s3 = cp.x*n3.x + cp.y*n3.y;
+
+    f32 tolerance = 0.0001f;
+
+    if ((s1 < 0 && s2 < 0 && s3 < 0) ||
+        (s1 < tolerance && s2 < 0 && s3 < 0) ||
+        (s2 < tolerance && s3 < 0 && s1 < 0) || 
+        (s3 < tolerance && s1 < 0 && s2 < 0)) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+bool point_in_triangle(v3 p, v3 a, v3 b, v3 c) {
+    v2 p_ = v2{p.x, p.z};
+    v2 a_ = v2{a.x, a.z};
+    v2 b_ = v2{b.x, b.z};
+    v2 c_ = v2{c.x, c.z};
+    return point_in_triangle(p_, a_, b_, c_);
+}
+
+bool point_in_triangle(v3 p, Triangle t) {
+    v2 p_ = v2{p.x, p.z};
+    v2 a_ = v2{t.e[0].x, t.e[0].z};
+    v2 b_ = v2{t.e[1].x, t.e[1].z};
+    v2 c_ = v2{t.e[2].x, t.e[2].z};
+    return point_in_triangle(p_, a_, b_, c_);
+}
+
+Triangle Triangle_(v3 a, v3 b, v3 c) {
+    Triangle result = {};
+    result.e[0] = a;
+    result.e[1] = b;
+    result.e[2] = c;
+    return result;
+}
+
+void push(Triangle_Stack *ts, Triangle t) {
+    assert(ts->count < ts->size);
+    ts->data[ts->count++] = t;
+}
+
+void pop(Triangle_Stack *ts) {
+    assert(ts->count > 0);
+    --ts->count;
+}
+
+void delaunay_triangulate(Vertex *vertices_, u32 count_) {
+    // Alloc/Copy vertices.
+    int count = (int)count_;
+    Vertex *vertices = (Vertex *)os_alloc(sizeof(Vertex)*(count + 3)); // add 3 for super-triangle.
+    copyarray(vertices_, vertices, count);
+
+    // Normalize while keeping aspect ratio.
+    f32 xmin =  F32_MAX;
+    f32 xmax = -F32_MAX;
+    f32 zmin =  F32_MAX;
+    f32 zmax = -F32_MAX;
+
+    for (int i = 0; i < count; ++i) {
+        Vertex v = vertices[i];
+        xmin = min(xmin, v.position.x);
+        xmax = max(xmax, v.position.x);
+        zmin = min(zmin, v.position.z);
+        zmax = max(zmax, v.position.z);
+    }
+
+    f32 dmax = max(xmax - xmin, zmax - zmin);
+
+    for (int i = 0; i < count; ++i) {
+        Vertex *v = vertices + i;
+        v->position.x = (v->position.x - xmin) / dmax;
+        v->position.z = (v->position.y - zmin) / dmax;
+    }
+
+    // Sort by proximity.
+    int ndiv = (int)(pow((f32)count, 0.25f) + 0.5f);
+    quicksort_bin(vertices, 0, count, ndiv);
+
+    // To assert if vertices are sorted correctly.
+#if 0
+    for (u32 i = 1; i < count; ++i) {
+        assert(get_bin(vertices[i], ndiv) >= get_bin(vertices[i-1], ndiv));
+    }
+#endif
+
+    // Add super-triangle to vertex array.
+    vertices[count].position.x   = -100;
+    vertices[count].position.y   = 0;
+    vertices[count].position.z   = -100;
+    vertices[count+1].position.x =  100;
+    vertices[count+1].position.y = 0;
+    vertices[count+1].position.z = -100;
+    vertices[count+2].position.x = 0;
+    vertices[count+2].position.y = 0;
+    vertices[count+2].position.z = 100;
+    count += 3;
+
+    int maxtri = 2*count;
+
+    int (*tri)[3] = (int (*)[3])os_alloc(3*sizeof(int)*maxtri);
+    tri[0][0] = count-3;
+    tri[0][1] = count-2;
+    tri[0][2] = count-1;
+
+    int (*adj)[3] = (int (*)[3])os_alloc(3*sizeof(int)*maxtri);
+    adj[0][0] = -1;
+    adj[0][1] = -1;
+    adj[0][2] = -1;
+
+    int tricount = 1;
+
+    // Iterate through points.
+    for (int vi = 0; vi < count - 3; ++vi) {
+    }
 }
 
 /*
@@ -184,7 +345,7 @@ void generate_vertices(Vertex *vertices, u32 count) {
     time(&t);
     srand((u32)t);
     const f32 invrandmax = 1.0f/(f32)RAND_MAX;
-    const f32 range = 0.8f;
+    const f32 range = 0.9f;
     for (u32 i = 0; i < count; ++i) {
         for (u32 j = 0; j < 3; ++j) {
             f32 val = 2.0f * ((f32)rand() * invrandmax) - 1.0f;
@@ -202,7 +363,7 @@ void restart(Vertex *vertices, u32 count, Vertex_Array *convexhull, Vertex_Array
     *triangulatedconvexhull = triangulate_convex_hull(convexhull);
 }
 
-int main() {
+int main(void) {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -214,7 +375,6 @@ int main() {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
-
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

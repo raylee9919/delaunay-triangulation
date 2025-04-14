@@ -20,4 +20,15 @@ struct Vertex_Array {
     unsigned int count;
 };
 
+struct Triangle {
+    v3 e[3];
+};
+
+struct Triangle_Stack {
+    Triangle *data;
+    u32 size;
+    u32 count;
+};
+
+
 #endif // GEO_H_
