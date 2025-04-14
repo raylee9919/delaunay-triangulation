@@ -107,35 +107,36 @@ void delaunayTriangulate(float points[][2], int numPoints){
 				tris=(int (*)[3])realloc(tris,(nT)*3*sizeof(int));
 				verts=(int (*)[3])realloc(verts,(nT)*3*sizeof(int));
 				// vertices of new triangles
-				verts[nT-2][0]=ii;
+				verts[nT-2][0]=ii; // #1
 				verts[nT-2][1]=verts[j][1];
 				verts[nT-2][2]=verts[j][2];
-				verts[nT-1][0]=ii;
+				verts[nT-1][0]=ii; // #2
 				verts[nT-1][1]=verts[j][2];
 				verts[nT-1][2]=verts[j][0];
 				// update adjacencies of triangles surrounding the old triangle
 				// fix adjacency of A
-				int adj1=tris[j][0];
-				int adj2=tris[j][1];
-				int adj3=tris[j][2];
+				int adj0=tris[j][0];
+				int adj1=tris[j][1];
+				int adj2=tris[j][2];
+				if (adj0>=0)
+					for (int m=0;m<3;m++)
+						if (tris[adj0][m]==j){
+							tris[adj0][m]=j; // #0
+							break;
+						}
 				if (adj1>=0)
 					for (int m=0;m<3;m++)
 						if (tris[adj1][m]==j){
-							tris[adj1][m]=j;
+							tris[adj1][m]=nT-2; // #1
 							break;
 						}
 				if (adj2>=0)
 					for (int m=0;m<3;m++)
 						if (tris[adj2][m]==j){
-							tris[adj2][m]=nT-2;
+							tris[adj2][m]=nT-1; // #2
 							break;
 						}
-				if (adj3>=0)
-					for (int m=0;m<3;m++)
-						if (tris[adj3][m]==j){
-							tris[adj3][m]=nT-1;
-							break;
-						}
+
 				// adjacencies of new triangles	
 				tris[nT-2][0]=j;
 				tris[nT-2][1]=tris[j][1];
@@ -143,34 +144,39 @@ void delaunayTriangulate(float points[][2], int numPoints){
 				tris[nT-1][0]=nT-2;
 				tris[nT-1][1]=tris[j][2];
 				tris[nT-1][2]=j;
+
 				// replace v3 of containing triangle with P and rotate to v1
 				verts[j][2]=verts[j][1];
 				verts[j][1]=verts[j][0];
 				verts[j][0]=ii;
+
 				// replace 1st and 3rd adjacencies of containing triangle with new triangles
 				tris[j][1]=tris[j][0];
-				tris[j][2]=nT-2;
-				tris[j][0]=nT-1;
-				// place each triangle containing P onto a stack, if the edge opposite P has an adjacent triangle
+				tris[j][2]=nT-2; // #1
+				tris[j][0]=nT-1; // #2
+
+				// place each triangle containing P onto a stack,
+                // if the edge opposite P has an adjacent triangle
 				if (tris[j][1]>=0)
 					triangleStack[++tos]=j;
 				if (tris[nT-2][1]>=0)
 					triangleStack[++tos]=nT-2;
 				if (tris[nT-1][1]>=0)
 					triangleStack[++tos]=nT-1;
+
 				while (tos>=0){ // looping thru the stack
 					int L=triangleStack[tos--];
 					float v1[2]={points[verts[L][2]][0],points[verts[L][2]][1]};
 					float v2[2]={points[verts[L][1]][0],points[verts[L][1]][1]};
 					int oppVert=-1;
 					int oppVertID=-1;
-					for (int k=0;k<3;k++){
-						if ((verts[tris[L][1]][k]!=verts[L][1])
-						   &&(verts[tris[L][1]][k]!=verts[L][2])){
-							oppVert=verts[tris[L][1]][k];
-							oppVertID=k;
-							break;
-						}
+					for (int k = 0; k < 3; ++k){
+                        if ((verts[tris[L][1]][k]!=verts[L][1])
+                            &&(verts[tris[L][1]][k]!=verts[L][2])){
+                            oppVert=verts[tris[L][1]][k];
+                            oppVertID=k;
+                            break;
+                        }
 					}
 					float v3[2]={points[oppVert][0],points[oppVert][1]};
 					float P[2]={points[ii][0],points[ii][1]};
@@ -204,6 +210,7 @@ void delaunayTriangulate(float points[][2], int numPoints){
 									tris[C][m]=R;
 									break;
 								}
+
 						// fix vertices and adjacency of R
 						for (int m=0;m<3;m++)
 							if (verts[R][m]==oppVert){
