@@ -8,6 +8,7 @@
 
    ======================================================================== */
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <math.h>
@@ -174,8 +175,8 @@ Vertex_Array triangulate_convex_hull(Vertex_Array *convexhull) {
 int get_bin(Vertex vertex, int ndiv) {
     f32 x = vertex.position.x;
     f32 z = vertex.position.z;
-    int i = int(z*ndiv*0.999f);
-    int j = int(x*ndiv*0.999f);
+    int i = int(z*ndiv*0.99f); // @TODO: divide by normalized-zmax.
+    int j = int(x*ndiv*0.99f);
     int bin = (i % 2 == 0) ? i*ndiv+j+1 : (i+1)*ndiv-j;
     return bin;
 }
@@ -231,12 +232,12 @@ bool point_in_triangle(v2 p, v2 a, v2 b, v2 c) {
     }
 }
 
-bool point_in_triangle(v3 p, v3 a, v3 b, v3 c) {
-    v2 p_ = v2{p.x, p.z};
-    v2 a_ = v2{a.x, a.z};
-    v2 b_ = v2{b.x, b.z};
-    v2 c_ = v2{c.x, c.z};
-    return point_in_triangle(p_, a_, b_, c_);
+bool point_in_triangle(v3 p_, v3 a_, v3 b_, v3 c_) {
+    v2 p = v2{p_.x, p_.z};
+    v2 a = v2{a_.x, a_.z};
+    v2 b = v2{b_.x, b_.z};
+    v2 c = v2{c_.x, c_.z};
+    return point_in_triangle(p, a, b, c);
 }
 
 Triangle Triangle_(v3 a, v3 b, v3 c) {
@@ -268,7 +269,17 @@ int delaunay_edge(int (*adj)[3], int L, int K) {
     return -1;
 }
 
-void delaunay_triangulate(Vertex *vertices_, u32 count_) {
+struct Delaunay_Triangulate_Result {
+    Vertex *vertices;
+    int vertexcount;
+
+    int (*triangles)[3];
+    int trianglecount;
+};
+
+Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) {
+    Delaunay_Triangulate_Result result = {};
+
     // Alloc/Copy vertices.
     int count = (int)count_;
     Vertex *vertices = (Vertex *)malloc(sizeof(Vertex)*(count + 3)); // add 3 for super-triangle.
@@ -304,22 +315,27 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
     vertices[count].position.x   = -100;
     vertices[count].position.y   = 0;
     vertices[count].position.z   = -100;
-    vertices[count+1].position.x =  100;
+
+    vertices[count+1].position.x = 100;
     vertices[count+1].position.y = 0;
     vertices[count+1].position.z = -100;
+
     vertices[count+2].position.x = 0;
     vertices[count+2].position.y = 0;
     vertices[count+2].position.z = 100;
+
     count += 3;
 
-    int maxtri = 2*(count-3);
+    int maxnumtri = 2*(count+3);
 
-    int (*tri)[3] = (int (*)[3])malloc(3*sizeof(int)*maxtri);
+    int (*tri)[3] = (int (*)[3])malloc(3*sizeof(int)*maxnumtri);
+    SCOPE_EXIT(free(tri));
     tri[0][0] = count-3;
     tri[0][1] = count-2;
     tri[0][2] = count-1;
 
-    int (*adj)[3] = (int (*)[3])malloc(3*sizeof(int)*maxtri);
+    int (*adj)[3] = (int (*)[3])malloc(3*sizeof(int)*maxnumtri);
+    SCOPE_EXIT(free(adj));
     adj[0][0] = -1;
     adj[0][1] = -1;
     adj[0][2] = -1;
@@ -338,8 +354,6 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         for (int ti = numtri - 1; ti >= 0; --ti) {
             // @TODO: Correctness.
             if (point_in_triangle(p, vertices[tri[ti][0]].position, vertices[tri[ti][1]].position, vertices[tri[ti][2]].position)) {
-                // @NOTE: ti, ti+1, ti+2        (WRONG)
-                //        ti, numtri, numtri+1  (CORRECT)
                 tri[numtri][0] = vi;
                 tri[numtri][1] = tri[ti][1];
                 tri[numtri][2] = tri[ti][2];
@@ -398,13 +412,13 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                 }
 
                 while (top >= 0) {
-                    int L = ts[top];
+                    int L = ts[top--];
                     int R = adj[L][1];
                     ASSERT(R >= 0);
 
                     int ERL = delaunay_edge(adj, R, L);
                     int ERA = (ERL + 1) % 3;
-                    int ERB = (ERA + 1) % 3;
+                    int ERB = (ERL + 2) % 3;
 
                     int P  = tri[L][0];
                     int V1 = tri[R][ERL];
@@ -492,9 +506,6 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                             adj[C][ECL] = R;
                         }
                     }
-
-                    ASSERT(top >= 0);
-                    --top;
                 }
 
                 // Net gain is 2.
@@ -551,24 +562,21 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         vertices[vi].position.z = (vertices[vi].position.z * dmax) + zmin;
     }
 
-    printf("Triangle Vertices(%d):\n", result_numtri);
-    for (int i = 0; i < result_numtri; ++i) {
-        printf("[%d,%d,%d]\n", result_tri[i][0], result_tri[i][1], result_tri[i][2]);
-    }
-
-    printf("Point Cloud:\n");
-    for (int i = 0; i < count; ++i) {
-        printf("%d:(%f,%f)\n", i, vertices[i].position.x, vertices[i].position.z);
-    }
-
     // @TODO: Return vertices, triangle-indices, adj-info.
+    result.vertices = vertices; // @TODO: redundant 3 super-triangle vertices in here. Isn't realloc worse...?
+    result.vertexcount = count;
+
+    result.triangles = result_tri;
+    result.trianglecount = result_numtri;
+
+    return result;
 }
 
 /*
  * Scene
  */
 void generate_vertices(Vertex *vertices, u32 count) {
-#if 0
+#if 1
     time_t t;
     time(&t);
     srand((u32)t);
@@ -664,7 +672,7 @@ int main(void) {
     Vertex_Array triangulated;
     restart(vertices, vertexcount, &hull, &triangulated);
 
-    delaunay_triangulate(vertices, 7);
+    Delaunay_Triangulate_Result dln_result = delaunay_triangulate(vertices, vertexcount);
 
     {
         glEnable(GL_DEPTH_TEST);
@@ -673,9 +681,12 @@ int main(void) {
 
     bool drawconvexhull = false;
     bool drawtriangulatedconvexhull = false;
+    bool drawdelaunay = false;
+    float scale = 0.15f;
+    GLuint circleshader_scale = glad_glGetUniformLocation(circleshader, "scale");
+    GLuint simpleshader_scale = glad_glGetUniformLocation(simpleshader, "scale");
 
-    while (!glfwWindowShouldClose(window)) 
-    {
+    while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();    
 
         {
@@ -688,10 +699,13 @@ int main(void) {
             ImGui::Begin("Control");
             ImGui::Checkbox("Draw Convex Hull", &drawconvexhull);
             ImGui::Checkbox("Draw Triangulated Convex Hull", &drawtriangulatedconvexhull);
+            ImGui::Checkbox("Draw Delaunay Triangulation", &drawdelaunay);
+            ImGui::DragFloat("Scale", &scale, 0.01f, 0.001f, 100.0f);
             if (ImGui::Button("Restart")) {
                 free(vertices);
                 vertices = (Vertex *)malloc(sizeof(Vertex) * vertexcount);
                 restart(vertices, vertexcount, &hull, &triangulated);
+                dln_result = delaunay_triangulate(vertices, vertexcount);
             }
             ImGui::End();
         }
@@ -704,6 +718,7 @@ int main(void) {
 
         {
             glUseProgram(circleshader);
+            glUniform1f(circleshader_scale, scale);
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, vertexcount * sizeof(Vertex), vertices, GL_DYNAMIC_DRAW);
@@ -713,6 +728,7 @@ int main(void) {
 
         if (drawconvexhull) {
             glUseProgram(simpleshader);
+            glUniform1f(simpleshader_scale, scale);
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, hull.count * sizeof(Vertex), hull.vertices, GL_DYNAMIC_DRAW);
@@ -722,11 +738,25 @@ int main(void) {
 
         if (drawtriangulatedconvexhull) {
             glUseProgram(simpleshader);
+            glUniform1f(simpleshader_scale, scale);
             glEnableVertexAttribArray(0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, triangulated.count * sizeof(Vertex), triangulated.vertices, GL_DYNAMIC_DRAW);
             glDrawArrays(GL_TRIANGLES, 0, triangulated.count);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDisableVertexAttribArray(0);
+        }
+
+        if (drawdelaunay) {
+            glUseProgram(simpleshader);
+            glUniform1f(simpleshader_scale, scale);
+            glEnableVertexAttribArray(0);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
+            glBufferData(GL_ARRAY_BUFFER, dln_result.vertexcount * sizeof(Vertex), dln_result.vertices, GL_DYNAMIC_DRAW);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, dln_result.trianglecount*3 * sizeof(int), dln_result.triangles, GL_DYNAMIC_DRAW);
+            glDrawElements(GL_TRIANGLES, dln_result.trianglecount*3, GL_UNSIGNED_INT, (void *)0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisableVertexAttribArray(0);
         }
