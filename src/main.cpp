@@ -336,6 +336,7 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         v3 p = vertices[vi].position;
         //int ti = numtri - 1;
         for (int ti = numtri - 1; ti >= 0; --ti) {
+            // @TODO: Correctness.
             if (point_in_triangle(p, vertices[tri[ti][0]].position, vertices[tri[ti][1]].position, vertices[tri[ti][2]].position)) {
                 // @NOTE: ti, ti+1, ti+2        (WRONG)
                 //        ti, numtri, numtri+1  (CORRECT)
@@ -396,9 +397,7 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                     ts[++top] = numtri+1;
                 }
 
-                // @NOTE: Sloan follows Lawson's swapping algorithm from below.
-                while (top >= 0) 
-                {
+                while (top >= 0) {
                     int L = ts[top];
                     int R = adj[L][1];
                     ASSERT(R >= 0);
@@ -407,7 +406,7 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                     int ERA = (ERL + 1) % 3;
                     int ERB = (ERA + 1) % 3;
 
-                    int P = tri[L][0];
+                    int P  = tri[L][0];
                     int V1 = tri[R][ERL];
                     int V2 = tri[R][ERA];
                     int V3 = tri[R][ERB];
@@ -438,6 +437,7 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                     f32 cosa = x13*x23 + z13*z23;
                     f32 cosb = x2p*x1p + z2p*z1p;
 
+                    // @TODO: Correctness.
                     bool swap;
 
                     if (cosa >= 0 && cosb >= 0) {
@@ -515,30 +515,37 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
     SCOPE_EXIT(free(flag));
     zeroarray(flag, numtri);
 
-
     int result_numtri = numtri;
     for (int ti = 0; ti < numtri; ++ti) {
         if (tri[ti][0] >= count-3 || tri[ti][1] >= count-3 || tri[ti][2] >= count-3) {
-            flag[ti] = true;
+            flag[ti] = 1;
             --result_numtri;
         }
     }
 
     int (*result_tri)[3] = (int (*)[3])malloc(sizeof(int)*3*result_numtri);
+    int (*result_adj)[3] = (int (*)[3])malloc(sizeof(int)*3*result_numtri);
 
-    for (int ti = 0, counter = 0; ti < numtri; ++ti) {
+    int idx = 0;
+    for (int ti = 0; ti < numtri; ++ti) {
         if (flag[ti] == true) {
 
         } else {
-            result_tri[counter][0] = tri[ti][0];
-            result_tri[counter][1] = tri[ti][1];
-            result_tri[counter][2] = tri[ti][2];
-            ++counter;
+            result_tri[idx][0] = tri[ti][0];
+            result_tri[idx][1] = tri[ti][1];
+            result_tri[idx][2] = tri[ti][2];
+
+            result_adj[idx][0] = (1 - flag[adj[ti][0]]) * adj[ti][0] - flag[adj[ti][0]];
+            result_adj[idx][1] = (1 - flag[adj[ti][1]]) * adj[ti][1] - flag[adj[ti][1]];
+            result_adj[idx][2] = (1 - flag[adj[ti][2]]) * adj[ti][2] - flag[adj[ti][2]];
+
+            ++idx;
         }
     }
 
     // Remap to original value.
     count-=3;
+
     for (int vi = 0; vi < count; ++vi) {
         vertices[vi].position.x = (vertices[vi].position.x * dmax) + xmin;
         vertices[vi].position.z = (vertices[vi].position.z * dmax) + zmin;
