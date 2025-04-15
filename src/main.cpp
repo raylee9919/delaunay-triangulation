@@ -274,13 +274,6 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
     Vertex *vertices = (Vertex *)malloc(sizeof(Vertex)*(count + 3)); // add 3 for super-triangle.
     copyarray(vertices_, vertices, count);
 
-#if 1 // Assert remapping correctness.
-    printf("\nVertices before mapping\n");
-    for (int vi = 0; vi < count; ++vi) {
-        printf("%f, %f, %f\n", vertices[vi].position.x, vertices[vi].position.y, vertices[vi].position.z);
-    }
-#endif
-
     // Normalize while keeping aspect ratio.
     f32 xmin =  F32_MAX;
     f32 xmax = -F32_MAX;
@@ -303,23 +296,9 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         v->position.z = (v->position.z - zmin) / dmax;
     }
 
-#if 1 // Assert remapping correctness.
-    printf("\nVertices after mapping\n");
-    for (int vi = 0; vi < count; ++vi) {
-        printf("%f, %f, %f\n", vertices[vi].position.x, vertices[vi].position.y, vertices[vi].position.z);
-    }
-#endif
-
     // Sort by proximity.
     int ndiv = (int)(pow((f32)count, 0.25f) + 0.5f);
     quicksort_bin(vertices, 0, count, ndiv);
-
-    // To ASSERT if vertices are sorted correctly.
-#if 0
-    for (u32 i = 1; i < count; ++i) {
-        ASSERT(get_bin(vertices[i], ndiv) >= get_bin(vertices[i-1], ndiv));
-    }
-#endif
 
     // Add super-triangle to vertex array.
     vertices[count].position.x   = -100;
@@ -358,64 +337,75 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         //int ti = numtri - 1;
         for (int ti = numtri - 1; ti >= 0; --ti) {
             if (point_in_triangle(p, vertices[tri[ti][0]].position, vertices[tri[ti][1]].position, vertices[tri[ti][2]].position)) {
-                tri[ti+1][0] = vi;
-                tri[ti+1][1] = tri[ti][2];
-                tri[ti+1][2] = tri[ti][0];
+                // @NOTE: ti, ti+1, ti+2        (WRONG)
+                //        ti, numtri, numtri+1  (CORRECT)
+                tri[numtri][0] = vi;
+                tri[numtri][1] = tri[ti][1];
+                tri[numtri][2] = tri[ti][2];
 
-                tri[ti+2][0] = vi;
-                tri[ti+2][1] = tri[ti][0];
-                tri[ti+2][2] = tri[ti][1];
+                tri[numtri+1][0] = vi;
+                tri[numtri+1][1] = tri[ti][2];
+                tri[numtri+1][2] = tri[ti][0];
 
                 // Retrive adj info.
-                int adj0 = adj[ti][0]; // A
-                int adj1 = adj[ti][1]; // B
-                int adj2 = adj[ti][2]; // C
+                int A = adj[ti][0];
+                int B = adj[ti][1];
+                int C = adj[ti][2];
 
                 // Update adj info of surrounding triangles.
-                if (adj2 >= 0) {
-                    adj[adj2][delaunay_edge(adj, adj2, ti)] = ti + 1;
+                if (B >= 0) {
+                    int EBT = delaunay_edge(adj, B, ti);
+                    adj[B][EBT] = numtri;
                 }
 
-                if (adj0 >= 0) {
-                    adj[adj0][delaunay_edge(adj, adj0, ti)] = ti + 2;
+                if (C >= 0) {
+                    int ECT = delaunay_edge(adj, C, ti);
+                    adj[C][ECT] = numtri+1;
                 }
 
                 // Update adj of new triangles.
-                adj[ti][0] = ti+2;
-                adj[ti][1] = adj1;
-                adj[ti][2] = ti+1;
+                adj[ti][0] = numtri+1;
+                adj[ti][1] = A;
+                adj[ti][2] = numtri;
 
-                adj[ti+1][0] = ti;
-                adj[ti+1][1] = adj2;
-                adj[ti+1][2] = ti+2;
+                adj[numtri][0] = ti;
+                adj[numtri][1] = B;
+                adj[numtri][2] = numtri+1;
 
-                adj[ti+2][0] = ti+1;
-                adj[ti+2][1] = adj0;
-                adj[ti+2][2] = ti;
+                adj[numtri+1][0] = numtri;
+                adj[numtri+1][1] = C;
+                adj[numtri+1][2] = ti;
 
-                // Move first point of T
+                tri[ti][2] = tri[ti][1];
+                tri[ti][1] = tri[ti][0];
                 tri[ti][0] = vi;
-                //tri[ti][1] = tri[ti][1];
-                //tri[ti][2] = tri[ti][2];
 
                 // Push newly added triangles to stack if has opposing triangle.
-                for (int i = 0; i < 3; ++i) {
-                    if (adj[ti + i][1] >= 0) {
-                        ASSERT(top < maxstk-1);
-                        ts[++top] = ti + i;
-                    }
+                if (adj[ti][1] >= 0) {
+                    ASSERT(top < maxstk-1);
+                    ts[++top] = ti;
                 }
 
-                // @TODO: Something's off. Have to look into Lawson's paper.
+                if (adj[numtri][1] >= 0) {
+                    ASSERT(top < maxstk-1);
+                    ts[++top] = numtri;
+                }
+
+                if (adj[numtri+1][1] >= 0) {
+                    ASSERT(top < maxstk-1);
+                    ts[++top] = numtri+1;
+                }
+
                 // @NOTE: Sloan follows Lawson's swapping algorithm from below.
-                while (top >= 0) {
+                while (top >= 0) 
+                {
                     int L = ts[top];
                     int R = adj[L][1];
                     ASSERT(R >= 0);
 
                     int ERL = delaunay_edge(adj, R, L);
-                    int ERA = (ERL % 3) + 1;
-                    int ERB = (ERA % 3) + 1;
+                    int ERA = (ERL + 1) % 3;
+                    int ERB = (ERA + 1) % 3;
 
                     int P = tri[L][0];
                     int V1 = tri[R][ERL];
@@ -488,7 +478,8 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                         // Push L-A and R-B on stack.
                         // Update adjacency lists for triangle A and C.
                         if (A >= 0) {
-                            adj[A][delaunay_edge(adj, A, R)] = L;
+                            int EAR = delaunay_edge(adj, A, R);
+                            adj[A][EAR] = L;
                             ASSERT(top < maxstk-1);
                             ts[++top] = L;
                         }
@@ -497,13 +488,17 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
                             ts[++top] = R;
                         }
                         if (C >= 0) {
-                            adj[C][delaunay_edge(adj, C, L)] = R;
+                            int ECL = delaunay_edge(adj, C, L);
+                            adj[C][ECL] = R;
                         }
                     }
 
                     ASSERT(top >= 0);
                     --top;
                 }
+
+                // Net gain is 2.
+                numtri += 2;
 
                 break;
             }
@@ -516,36 +511,29 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
     ASSERT(numtri == 2*(count-3)+1);
 
     // Remove triangles including super-triangle's vertex.
-    int p[3];
-    p[0] = count - 3;
-    p[1] = count - 2;
-    p[2] = count - 1;
-
     bool *flag = (bool *)malloc(sizeof(bool)*numtri);
     SCOPE_EXIT(free(flag));
     zeroarray(flag, numtri);
 
+
+    int result_numtri = numtri;
     for (int ti = 0; ti < numtri; ++ti) {
-        bool match = false;
-        for (int i = 0; i < 3 && !match; ++i) {
-            for (int j = 0; j < 3 && !match; ++j) {
-                if (p[i] == tri[ti][j]) {
-                    flag[ti] = true;
-                    match = true;
-                }
-            }
+        if (tri[ti][0] >= count-3 || tri[ti][1] >= count-3 || tri[ti][2] >= count-3) {
+            flag[ti] = true;
+            --result_numtri;
         }
     }
 
-    // @NOTE: Just realloc?
-    // Remove by swapping and decrementing counter.
-    for (int ti = 0; ti < numtri; ++ti) {
-        if (flag[ti]) {
-            int tmp[3];
-            copyarray(tri[ti], tmp, 3);
-            copyarray(tri[numtri-1], tri[ti], 3);
-            copyarray(tmp, tri[numtri-1], 3);
-            --numtri;
+    int (*result_tri)[3] = (int (*)[3])malloc(sizeof(int)*3*result_numtri);
+
+    for (int ti = 0, counter = 0; ti < numtri; ++ti) {
+        if (flag[ti] == true) {
+
+        } else {
+            result_tri[counter][0] = tri[ti][0];
+            result_tri[counter][1] = tri[ti][1];
+            result_tri[counter][2] = tri[ti][2];
+            ++counter;
         }
     }
 
@@ -556,16 +544,15 @@ void delaunay_triangulate(Vertex *vertices_, u32 count_) {
         vertices[vi].position.z = (vertices[vi].position.z * dmax) + zmin;
     }
 
-#if 1 // Assert remapping correctness. printf("\n");
-    printf("\nVertices restored.\n");
-    for (int vi = 0; vi < count - 3; ++vi) {
-        printf("%f, %f, %f\n", vertices[vi].position.x, vertices[vi].position.y, vertices[vi].position.z);
+    printf("Triangle Vertices(%d):\n", result_numtri);
+    for (int i = 0; i < result_numtri; ++i) {
+        printf("[%d,%d,%d]\n", result_tri[i][0], result_tri[i][1], result_tri[i][2]);
     }
-#endif
 
-#if 1
-    printf("\n#Triangle: %d\n", numtri);
-#endif
+    printf("Point Cloud:\n");
+    for (int i = 0; i < count; ++i) {
+        printf("%d:(%f,%f)\n", i, vertices[i].position.x, vertices[i].position.z);
+    }
 
     // @TODO: Return vertices, triangle-indices, adj-info.
 }
