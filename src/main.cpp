@@ -172,38 +172,32 @@ Vertex_Array triangulate_convex_hull(Vertex_Array *convexhull) {
     return result;
 }
 
-int get_bin(Vertex vertex, int ndiv) {
-    f32 x = vertex.position.x;
-    f32 z = vertex.position.z;
-    int i = int(z*ndiv*0.99f); // @TODO: divide by normalized-zmax.
-    int j = int(x*ndiv*0.99f);
-    int bin = (i % 2 == 0) ? i*ndiv+j+1 : (i+1)*ndiv-j;
-    return bin;
-}
-
-u32 partition_bin(Vertex *vertices, u32 lo, u32 hi, int ndiv) {
+u32 partition_bin(int *VIDX, u32 lo, u32 hi, int *BIN) {
     u32 j, k = lo;
 
     for (j = lo + 1; j < hi; j++) {
-        if (get_bin(vertices[j], ndiv) - get_bin(vertices[lo], ndiv) <= 0) {
+        if (BIN[VIDX[j]] - BIN[VIDX[lo]] <= 0) {
             k++;
-            swap_vertex(vertices + k, vertices + j);
+            int tmp = VIDX[k];
+            VIDX[k] = VIDX[j];
+            VIDX[j] = tmp;
         }
     }
 
-    swap_vertex(vertices + lo, vertices + k);
+    int tmp = VIDX[k];
+    VIDX[k] = VIDX[lo];
+    VIDX[lo] = tmp;
     return k;
 }
 
-void quicksort_bin(Vertex *vertices, u32 lo, u32 hi, int ndiv) {
+void quicksort_bin(int *VIDX, u32 lo, u32 hi, int *BIN) {
     if (hi > lo + 1) {
-        u32 mid = partition_bin(vertices, lo, hi, ndiv);
-        quicksort_bin(vertices, lo, mid, ndiv);
-        quicksort_bin(vertices, mid + 1, hi, ndiv);
+        u32 mid = partition_bin(VIDX, lo, hi, BIN);
+        quicksort_bin(VIDX, lo, mid, BIN);
+        quicksort_bin(VIDX, mid + 1, hi, BIN);
     }
 }
 
-// @TODO: Correctness.
 bool point_in_triangle(v2 p, v2 a, v2 b, v2 c) {
     v2 ab = b - a;
     v2 bc = c - b;
@@ -232,32 +226,6 @@ bool point_in_triangle(v2 p, v2 a, v2 b, v2 c) {
     }
 }
 
-bool point_in_triangle(v3 p_, v3 a_, v3 b_, v3 c_) {
-    v2 p = v2{p_.x, p_.z};
-    v2 a = v2{a_.x, a_.z};
-    v2 b = v2{b_.x, b_.z};
-    v2 c = v2{c_.x, c_.z};
-    return point_in_triangle(p, a, b, c);
-}
-
-Triangle Triangle_(v3 a, v3 b, v3 c) {
-    Triangle result = {};
-    result.e[0] = a;
-    result.e[1] = b;
-    result.e[2] = c;
-    return result;
-}
-
-void push(Triangle_Stack *ts, Triangle t) {
-    ASSERT(ts->count < ts->size);
-    ts->data[ts->count++] = t;
-}
-
-void pop(Triangle_Stack *ts) {
-    ASSERT(ts->count > 0);
-    --ts->count;
-}
-
 int delaunay_edge(int (*adj)[3], int L, int K) {
     for (int e = 0; e < 3; ++e) {
         if (adj[L][e] == K) {
@@ -270,59 +238,76 @@ int delaunay_edge(int (*adj)[3], int L, int K) {
 }
 
 struct Delaunay_Triangulate_Result {
-    Vertex *vertices;
-    int vertexcount;
-
     int (*triangles)[3];
+    int (*adj)[3];
     int trianglecount;
 };
 
-Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) {
+Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices, unsigned int count_) {
     Delaunay_Triangulate_Result result = {};
 
-    // Alloc/Copy vertices.
     int count = (int)count_;
-    Vertex *vertices = (Vertex *)malloc(sizeof(Vertex)*(count + 3)); // add 3 for super-triangle.
-    copyarray(vertices_, vertices, count);
 
-    // Normalize while keeping aspect ratio.
+    int *VIDX = (int *)malloc(sizeof(int)*count);
+    SCOPE_EXIT(free(VIDX));
+    for (int i = 0; i < count; ++i) VIDX[i] = i;
+
+    int *BIN = (int *)malloc(sizeof(int)*count);
+    SCOPE_EXIT(free(BIN));
+
+    v2 *positions = (v2 *)malloc(sizeof(v2)*(count+3));
+    SCOPE_EXIT(free(positions));
+    for (int i = 0; i < count; ++i) {
+        positions[i].x = vertices[i].position.x;
+        positions[i].y = vertices[i].position.z;
+    }
+
+    // @NOTE: Normalize while keeping aspect ratio.
     f32 xmin =  F32_MAX;
     f32 xmax = -F32_MAX;
-    f32 zmin =  F32_MAX;
-    f32 zmax = -F32_MAX;
+    f32 ymin =  F32_MAX;
+    f32 ymax = -F32_MAX;
 
     for (int i = 0; i < count; ++i) {
-        Vertex v = vertices[i];
-        xmin = min(xmin, v.position.x);
-        xmax = max(xmax, v.position.x);
-        zmin = min(zmin, v.position.z);
-        zmax = max(zmax, v.position.z);
+        float x = positions[i].x;
+        float z = positions[i].y;
+        xmin = min(xmin, x);
+        xmax = max(xmax, x);
+        ymin = min(ymin, z);
+        ymax = max(ymax, z);
     }
 
-    f32 dmax = max(xmax - xmin, zmax - zmin);
+    float invdmax = 1.0f / max(xmax - xmin, ymax - ymin);
 
     for (int i = 0; i < count; ++i) {
-        Vertex *v = vertices + i;
-        v->position.x = (v->position.x - xmin) / dmax;
-        v->position.z = (v->position.z - zmin) / dmax;
+        positions[i].x = (positions[i].x - xmin) * invdmax;
+        positions[i].y = (positions[i].y - ymin) * invdmax;
     }
 
-    // Sort by proximity.
+    float invnxmax = 1.0f / ((xmax - xmin) * invdmax);
+    float invnymax = 1.0f / ((ymax - ymin) * invdmax);
+
+    // @NOTE: Sort by proximity.
     int ndiv = (int)(pow((f32)count, 0.25f) + 0.5f);
-    quicksort_bin(vertices, 0, count, ndiv);
+    for (int k = 0; k < count; ++k) {
+        f32 x = positions[k].x;
+        f32 y = positions[k].y;
+        int i = int(y*ndiv*0.99f*invnxmax);
+        int j = int(x*ndiv*0.99f*invnymax);
+        int bin = (i % 2 == 0) ? i*ndiv+j+1 : (i+1)*ndiv-j;
+        BIN[k] = bin;
+    }
+    quicksort_bin(VIDX, 0, count, BIN);
 
     // Add super-triangle to vertex array.
-    vertices[count].position.x   = -100;
-    vertices[count].position.y   = 0;
-    vertices[count].position.z   = -100;
+    positions[count].x   = -100;
+    positions[count].y   = -100;
 
-    vertices[count+1].position.x = 100;
-    vertices[count+1].position.y = 0;
-    vertices[count+1].position.z = -100;
+    positions[count+1].x = 100;
+    positions[count+1].y = -100;
 
-    vertices[count+2].position.x = 0;
-    vertices[count+2].position.y = 0;
-    vertices[count+2].position.z = 100;
+    positions[count+2].x = 0;
+    positions[count+2].y = 100;
 
     count += 3;
 
@@ -341,24 +326,22 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
     adj[0][2] = -1;
 
     int maxstk = (count-3);
-    int *ts = (int *)malloc(maxstk*sizeof(int)); // @ROBUSTNESS: Sloan suggests #point is good enough for 10,000. Assertion required.
+    int *ts = (int *)malloc(maxstk*sizeof(int)); // @NOTE: Sloan suggests #point is good enough for 10,000. Assertion required.
     SCOPE_EXIT(free(ts));
     int top = -1;
 
     int numtri = 1;
 
-    // Iterate through points.
-    for (int vi = 0; vi < count - 3; ++vi) {
-        v3 p = vertices[vi].position;
+    for (int vii = 0; vii < count - 3; ++vii) {
+        int p = VIDX[vii];
         //int ti = numtri - 1;
         for (int ti = numtri - 1; ti >= 0; --ti) {
-            // @TODO: Correctness.
-            if (point_in_triangle(p, vertices[tri[ti][0]].position, vertices[tri[ti][1]].position, vertices[tri[ti][2]].position)) {
-                tri[numtri][0] = vi;
+            if (point_in_triangle(positions[p], positions[tri[ti][0]], positions[tri[ti][1]], positions[tri[ti][2]])) {
+                tri[numtri][0] = p;
                 tri[numtri][1] = tri[ti][1];
                 tri[numtri][2] = tri[ti][2];
 
-                tri[numtri+1][0] = vi;
+                tri[numtri+1][0] = p;
                 tri[numtri+1][1] = tri[ti][2];
                 tri[numtri+1][2] = tri[ti][0];
 
@@ -393,7 +376,7 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
 
                 tri[ti][2] = tri[ti][1];
                 tri[ti][1] = tri[ti][0];
-                tri[ti][0] = vi;
+                tri[ti][0] = p;
 
                 // Push newly added triangles to stack if has opposing triangle.
                 if (adj[ti][1] >= 0) {
@@ -427,16 +410,15 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
 
                     // Determine if a pair of adjacent triangles form a convex quadrilateral with the
                     // maximum minimum angle. Due to 'Cline' and 'Renka'.
-                    // @TODO: typo...?
-                    f32 xp = vertices[P].position.x;
-                    f32 x1 = vertices[V1].position.x;
-                    f32 x2 = vertices[V2].position.x;
-                    f32 x3 = vertices[V3].position.x;
+                    f32 xp = positions[P].x;
+                    f32 x1 = positions[V1].x;
+                    f32 x2 = positions[V2].x;
+                    f32 x3 = positions[V3].x;
 
-                    f32 zp = vertices[P].position.z;
-                    f32 z1 = vertices[V1].position.z;
-                    f32 z2 = vertices[V2].position.z;
-                    f32 z3 = vertices[V3].position.z;
+                    f32 zp = positions[P].y;
+                    f32 z1 = positions[V1].y;
+                    f32 z2 = positions[V2].y;
+                    f32 z3 = positions[V3].y;
 
                     f32 x13 = x1 - x3;
                     f32 x23 = x2 - x3;
@@ -451,7 +433,6 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
                     f32 cosa = x13*x23 + z13*z23;
                     f32 cosb = x2p*x1p + z2p*z1p;
 
-                    // @TODO: Correctness.
                     bool swap;
 
                     if (cosa >= 0 && cosb >= 0) {
@@ -508,7 +489,6 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
                     }
                 }
 
-                // Net gain is 2.
                 numtri += 2;
 
                 break;
@@ -518,18 +498,21 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
         // @TODO: adjust triangle index according to direction and sorted bin.
     }
 
-    // Check consistency of triangulation.
+    // @NOTE: Check consistency of triangulation.
     ASSERT(numtri == 2*(count-3)+1);
 
-    // Remove triangles including super-triangle's vertex.
-    bool *flag = (bool *)malloc(sizeof(bool)*numtri);
-    SCOPE_EXIT(free(flag));
-    zeroarray(flag, numtri);
+    // @NOTE: Remove triangles including super-triangle's vertex.
+    bool *rmflag = (bool *)malloc(sizeof(bool)*numtri);
+    SCOPE_EXIT(free(rmflag));
+    zeroarray(rmflag, numtri);
+
+    int *trimap = (int *)malloc(sizeof(int)*count);
+    SCOPE_EXIT(free(trimap));
 
     int result_numtri = numtri;
     for (int ti = 0; ti < numtri; ++ti) {
         if (tri[ti][0] >= count-3 || tri[ti][1] >= count-3 || tri[ti][2] >= count-3) {
-            flag[ti] = 1;
+            rmflag[ti] = 1;
             --result_numtri;
         }
     }
@@ -538,35 +521,38 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
     int (*result_adj)[3] = (int (*)[3])malloc(sizeof(int)*3*result_numtri);
 
     int idx = 0;
-    for (int ti = 0; ti < numtri; ++ti) {
-        if (flag[ti] == true) {
-
+    for (int T = 0; T < numtri; ++T) {
+        if (rmflag[T]) {
+            trimap[T] = -1;
         } else {
-            result_tri[idx][0] = tri[ti][0];
-            result_tri[idx][1] = tri[ti][1];
-            result_tri[idx][2] = tri[ti][2];
+            result_tri[idx][0] = tri[T][0];
+            result_tri[idx][1] = tri[T][1];
+            result_tri[idx][2] = tri[T][2];
 
-            result_adj[idx][0] = (1 - flag[adj[ti][0]]) * adj[ti][0] - flag[adj[ti][0]];
-            result_adj[idx][1] = (1 - flag[adj[ti][1]]) * adj[ti][1] - flag[adj[ti][1]];
-            result_adj[idx][2] = (1 - flag[adj[ti][2]]) * adj[ti][2] - flag[adj[ti][2]];
+            trimap[T] = idx;
 
             ++idx;
         }
     }
+    ASSERT(idx == result_numtri);
 
-    // Remap to original value.
+    int adjcounter = 0;
+    for (int T = 0; T < numtri; ++T) {
+        int idx = trimap[T];
+        if (idx >= 0) {
+            ++adjcounter;
+            for (int i = 0; i < 3; ++i) {
+                result_adj[idx][i] = trimap[adj[T][i]];
+            }
+        }
+    }
+    ASSERT(adjcounter == result_numtri);
+ 
+    // @NOTE: Remap to original value.
     count-=3;
 
-    for (int vi = 0; vi < count; ++vi) {
-        vertices[vi].position.x = (vertices[vi].position.x * dmax) + xmin;
-        vertices[vi].position.z = (vertices[vi].position.z * dmax) + zmin;
-    }
-
-    // @TODO: Return vertices, triangle-indices, adj-info.
-    result.vertices = vertices; // @TODO: redundant 3 super-triangle vertices in here. Isn't realloc worse...?
-    result.vertexcount = count;
-
     result.triangles = result_tri;
+    result.adj = result_adj;
     result.trianglecount = result_numtri;
 
     return result;
@@ -576,7 +562,7 @@ Delaunay_Triangulate_Result delaunay_triangulate(Vertex *vertices_, u32 count_) 
  * Scene
  */
 void generate_vertices(Vertex *vertices, u32 count) {
-#if 1
+#if 0
     time_t t;
     time(&t);
     srand((u32)t);
@@ -754,7 +740,7 @@ int main(void) {
             glEnableVertexAttribArray(0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
-            glBufferData(GL_ARRAY_BUFFER, dln_result.vertexcount * sizeof(Vertex), dln_result.vertices, GL_DYNAMIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, vertexcount * sizeof(Vertex), vertices, GL_DYNAMIC_DRAW);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, dln_result.trianglecount*3 * sizeof(int), dln_result.triangles, GL_DYNAMIC_DRAW);
             glDrawElements(GL_TRIANGLES, dln_result.trianglecount*3, GL_UNSIGNED_INT, (void *)0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
