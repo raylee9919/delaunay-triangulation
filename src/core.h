@@ -17,14 +17,14 @@
 #define INVALID_CODE_PATH Assert(!"Invalid Code Path")
 #define INVALID_DEFAULT_CASE default: { INVALID_CODE_PATH } break
 
-#define max(a, b) ( (a > b) ? a : b )
-#define min(a, b) ( (a < b) ? a : b )
+#define max(a, b) ( (a > b) ? (a) : (b) )
+#define min(a, b) ( (a < b) ? (a) : (b) )
 #define arraycount(array) ( sizeof(array) / sizeof(array[0]) )
 
 #define offsetof(Type, Member) (size_t)&(((Type *)0)->Member)
 
 #define zerostruct(PTR, STRUCT) zerosize(PTR, sizeof(STRUCT))
-#define zeroarray(ARR, COUNT) zerosize(ARR, COUNT * sizeof(ARR[0]))
+#define zeroarray(ARR, COUNT) zerosize(ARR, (COUNT) * sizeof(ARR[0]))
 inline void zerosize(void *ptr, mmm size) {
     u8 *byte = (u8 *)ptr;
     while (size--) *byte++ = 0;

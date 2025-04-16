@@ -20,6 +20,10 @@ void gl_framebuffer_resize_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }  
 
+void glfw_error_callback(int error, const char* description) {
+    fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+}
+
 GLuint glcreateshader(const char *vsrc, const char *fsrc) {
     GLuint program = 0;
 
