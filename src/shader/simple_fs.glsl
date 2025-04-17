@@ -4,9 +4,11 @@ in v3 fP;
 
 out v4 result_color;
 
+uniform v4 color;
+
 void main()
 {
-    result_color = v4(1.0,0.8,0,1);
+    result_color = color;
 }
 
 )";

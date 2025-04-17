@@ -37,23 +37,22 @@ void swap_vertex(Vertex *a, Vertex *b) {
     *b = tmp;
 }
 
-void swap_u32(u32 *a, u32 *b) {
-    u32 tmp = *a;
-    *a = *b;
-    *b = tmp;
-}
-
-u32 partition_colinear(u32 *colinear, u32 lo, u32 hi, Vertex *vertices, Vertex anchor) {
+unsigned int partition_colinear(u32 *colinear, u32 lo, u32 hi, Vertex *vertices, Vertex anchor) {
     u32 j, k = lo;
 
     for (j = lo + 1; j < hi; j++) {
         if (distance(anchor.position, vertices[colinear[j]].position) - distance(anchor.position, vertices[colinear[lo]].position) <= 0) {
             k++;
-            swap_u32(colinear + k, colinear + j);
+            unsigned int tmp = colinear[k];
+            colinear[k] = colinear[j];
+            colinear[j] = tmp;
         }
     }
 
-    swap_u32(colinear + lo, colinear + k);
+    unsigned int tmp = colinear[k];
+    colinear[k] = colinear[lo];
+    colinear[lo] = tmp;
+
     return k;
 }
 
@@ -237,6 +236,95 @@ int delaunay_edge(int (*adj)[3], int L, int K) {
     return -1;
 }
 
+inline float cross(v2 a, v2 b) {
+    return (a.x*b.y-a.y*b.x);
+}
+
+// @NOTE: Colinear isn't considered on right.
+bool point_on_right_line(v2 p, v2 a, v2 b) {
+    v2 v1 = b-a;
+    v2 v2 = p-a;
+    float det = v1.x*v2.y - v1.y*v2.x;
+    if (det < 0) return true;
+    return false;
+}
+
+// @NOTE: Colinear cases aren't considered intersecting.
+bool line_segments_intersect(v2 a1, v2 a2, v2 b1, v2 b2) {
+    v2 p = a2-a1;
+    v2 q1 = b1-a2;
+    v2 q2 = b2-a2;
+    float c1 = cross(p, q1);
+    float c2 = cross(p, q2);
+    if (c1*c2 >= 0) return false;
+
+    v2 q = b2-b1;
+    v2 p1 = a1-b2;
+    v2 p2 = a2-b2;
+    c1 = cross(q, p1);
+    c2 = cross(q, p2);
+    if (c1*c2 >= 0) return false;
+
+    return true;
+}
+
+bool is_convex(v2 a, v2 b, v2 c, v2 d) {
+    v2 s[4];
+    s[0] = b-a;
+    s[1] = c-b;
+    s[2] = d-c;
+    s[3] = a-d;
+
+    float cp[4];
+    for (int i = 0; i < 4; ++i) {
+        int j = (i+1)%4;
+        cp[i] = (s[i].x*s[j].y - s[i].y*s[j].x);
+    }
+
+    if (cp[0] < 0 && cp[1] < 0 && cp[2] < 0 && cp[3] < 0) return true;
+    if (cp[0] > 0 && cp[1] > 0 && cp[2] > 0 && cp[3] > 0) return true;
+    return false;
+}
+
+bool delaunay_bad(float xp, float x1, float x2, float x3, float yp, float y1, float y2, float y3) {
+    // @NOTE: Determine if a pair of adjacent triangles form a convex quadrilateral with the maximum minimum angle.
+
+    float x13 = x1 - x3;
+    float x23 = x2 - x3;
+    float x1p = x1 - xp;
+    float x2p = x2 - xp;
+
+    float y13 = y1 - y3;
+    float y23 = y2 - y3;
+    float y1p = y1 - yp;
+    float y2p = y2 - yp;
+
+    float cosa = x13*x23 + y13*y23;
+    float cosb = x2p*x1p + y2p*y1p;
+
+    bool result;
+
+    if (cosa >= 0 && cosb >= 0) {
+        result = false;
+    } else if (cosa < 0 && cosb < 0) {
+        result = true;
+    } else {
+        float sina = x13*y23 - x23*y13;
+        float sinb = x2p*y1p - x1p*y2p;
+
+        float sinab = sina*cosb + sinb*cosa;
+
+        if (sinab < 0) {
+            result = true;
+        } else {
+            result = false;
+        }
+    }
+
+    return result;
+}
+
+
 typedef struct Delaunay_Triangulate_Result {
     int numtri;
     int (*tri)[3];
@@ -411,50 +499,17 @@ delaunay_triangulate(Vertex *vertices, unsigned int vertexcount, int (*edges)[2]
                     int V2 = tri[R][ERA];
                     int V3 = tri[R][ERB];
 
-                    // @NOTE: Determine if a pair of adjacent triangles form a convex quadrilateral with the maximum minimum angle.
                     float xp = positions[P].x;
                     float x1 = positions[V1].x;
                     float x2 = positions[V2].x;
                     float x3 = positions[V3].x;
 
-                    float zp = positions[P].y;
-                    float z1 = positions[V1].y;
-                    float z2 = positions[V2].y;
-                    float z3 = positions[V3].y;
+                    float yp = positions[P].y;
+                    float y1 = positions[V1].y;
+                    float y2 = positions[V2].y;
+                    float y3 = positions[V3].y;
 
-                    float x13 = x1 - x3;
-                    float x23 = x2 - x3;
-                    float x1p = x1 - xp;
-                    float x2p = x2 - xp;
-
-                    float z13 = z1 - z3;
-                    float z23 = z2 - z3;
-                    float z1p = z1 - zp;
-                    float z2p = z2 - zp;
-
-                    float cosa = x13*x23 + z13*z23;
-                    float cosb = x2p*x1p + z2p*z1p;
-
-                    bool swap;
-
-                    if (cosa >= 0 && cosb >= 0) {
-                        swap = false;
-                    } else if (cosa < 0 && cosb < 0) {
-                        swap = true;
-                    } else {
-                        float sina = x13*z23 - x23*z13;
-                        float sinb = x2p*z1p - x1p*z2p;
-
-                        float sinab = sina*cosb + sinb*cosa;
-
-                        if (sinab < 0) {
-                            swap = true;
-                        } else {
-                            swap = false;
-                        }
-                    }
-
-                    if (swap) {
+                    if (delaunay_bad(xp,x1,x2,x3,yp,y1,y2,y3)) {
                         int A = adj[R][ERA];
                         int B = adj[R][ERB];
                         int C = adj[L][2];
@@ -505,16 +560,29 @@ delaunay_triangulate(Vertex *vertices, unsigned int vertexcount, int (*edges)[2]
 
 
     // @NOTE: Constrained Delaunay Triangulation.
-    //if (edges && edgecount) {
-    if (1) {
-        int *tl = (int *)malloc(sizeof(int)*(count)*numtri);
+    if (edges && edgecount) {
+        int *tl = (int *)malloc(sizeof(int)*count*numtri);
         SCOPE_EXIT(free(tl));
 
-        int *tlcount = (int *)malloc(sizeof(int)*(count));
+        int *tlcount = (int *)malloc(sizeof(int)*count);
         SCOPE_EXIT(free(tlcount));
         zeroarray(tlcount, count);
 
-        // @NOTE: Build triangle-list per vertex.
+        // Itersecting edges.
+        int ielen = count*3;
+        int (*ie)[2] = (int (*)[2])malloc(2*sizeof(int)*ielen);
+        int ielo = 0;
+        int iehi = 0;
+        SCOPE_EXIT(free(ie));
+
+        // New edges.
+        int nelen = count*3;
+        int (*ne)[2] = (int (*)[2])malloc(2*sizeof(int)*nelen);
+        int nelo = 0;
+        int nehi = 0;
+        SCOPE_EXIT(free(ne));
+
+        // Build triangle-list per vertex.
         int tlpitch = numtri;
         for (int T = 0; T < numtri; ++T) {
             for (int i = 0; i < 3; ++i) {
@@ -524,12 +592,223 @@ delaunay_triangulate(Vertex *vertices, unsigned int vertexcount, int (*edges)[2]
         }
 
         // @NOTE: Iterate through constraint edges.
-        for (int ei = 0; ei < edgecount; ++ei) {
-            int vi = edges[ei][0];
-            int vj = edges[ei][1];
+        for (int cei = 0; cei < edgecount; ++cei) {
+            int vi = edges[cei][0];
+            int vj = edges[cei][1];
 
-            for (int i = 0; i < tlcount[i]; ++i) {
-                int T = tl[vi];
+            // @NOTE: Find starting triangle by circling around vertex i.
+            int T = -1;
+            for (int t = 0; t < tlcount[vi]; ++t) {
+                int tmpT = tl[vi*tlpitch + t];
+                for (int v = 0; v < 3; ++v) {
+                    int vk = tri[tmpT][v];
+                    int vl = tri[tmpT][(v+1)%3];
+                    if (line_segments_intersect(positions[vi], positions[vj], positions[vk], positions[vl])) {
+                        T = tmpT;
+                        break;
+                    }
+                }
+
+                if (T != -1)
+                    break;
+            }
+            ASSERT(T != -1);
+
+            while (1) {
+                for (int v = 0; v < 3; ++v) {
+                    int vk = tri[T][v];
+                    int vl = tri[T][(v+1)%3];
+
+                    if (vk == vj || vl == vj) {
+                        T = -1;
+                        break;
+                    }
+
+                    // @TODO: Possible duplicate calcs.
+                    if (point_on_right_line(positions[vj], positions[vk], positions[vl]) && line_segments_intersect(positions[vi], positions[vj], positions[vk], positions[vl])) {
+                        ie[iehi][0] = vk;
+                        ie[iehi][1] = vl;;
+                        iehi = (iehi+1)%ielen;
+
+                        T = adj[T][v];
+                        break;
+                    }
+                }
+
+                if (T == -1)
+                    break;
+            }
+
+            // @NOTE Iterate intersecting edges (ie).
+            while (ielo != iehi) {
+                // @NOTE: Remove an edge from the list.
+                int vk = ie[ielo][0];
+                int vl = ie[ielo][1];
+
+                int L = ie[ielo][0];
+                int v = ie[ielo][1];
+
+                ielo = (ielo+1)%ielen;
+
+                int R = adj[L][v];
+
+                int ERL = delaunay_edge(adj, R, L);
+                int ERA = (ERL+1)%3;
+                int ERB = (ERL+2)%3;
+
+                int V2 = tri[L][v];
+                int V1 = tri[L][(v+1)%3];
+                int P = tri[L][(v+2)%3];
+                int V3 = tri[R][(ERL+2)%3];
+
+                if (!is_convex(positions[P], positions[V2], positions[V3], positions[V1])) {
+                    // @NOTE: If strictly concave, put it back on.
+                    ie[iehi][0] = L;
+                    ie[iehi][1] = v;
+                    iehi = (iehi+1)%ielen;
+                } else {
+                    // @NOTE: If convex, swap diagonal.
+                    int A = adj[R][ERA];
+                    int B = adj[R][ERB];
+                    int C = adj[L][(v+1)%3];
+                    int D = adj[L][(v+2)%3];
+
+                    // Update vertex and adjacency list for L.
+                    tri[L][0] = P;
+                    tri[L][1] = V2;
+                    tri[L][2] = V3;
+                    adj[L][0] = D;
+                    adj[L][1] = A;
+                    adj[L][2] = R;
+
+                    // Update vertex and adjacency list for R.
+                    tri[R][0] = P;
+                    tri[R][1] = V3;
+                    tri[R][2] = V1;
+                    adj[R][0] = L;
+                    adj[R][1] = B;
+                    adj[R][2] = C;
+
+                    // Update adjacency lists for triangle A and C.
+                    if (A >= 0) {
+                        int EAR = delaunay_edge(adj, A, R);
+                        adj[A][EAR] = L;
+                    }
+                    if (C >= 0) {
+                        int ECL = delaunay_edge(adj, C, L);
+                        adj[C][ECL] = R;
+                    }
+
+                    // @TODO: HOW TO STRUCTURE OUR EDGE-LIST!!!
+                    // out of edges, I need to retrieve L and R, which constantly changes in the loop.
+#if 0
+                    // @NOTE: Update triangle-list.
+                    //        Remove L from V1, Add L to V3
+                    //        Remove R from V2, Add R to P 
+                    for (int i = 0; i < tlcount[V1]; ++i) {
+                        if (tl[V1*tlpitch + i] == L) {
+                            tl[V1*tlpitch + i] = tl[V1*tlpitch + --tlcount[V1]];
+                            break;
+                        }
+                    }
+                    tl[V3*tlpitch + tlcount[V3]++] = L;
+
+                    for (int i = 0; i < tlcount[V2]; ++i) {
+                        if (tl[V2*tlpitch + i] == R) {
+                            tl[V2*tlpitch + i] = tl[V2*tlpitch + --tlcount[V2]];
+                            break;
+                        }
+                    }
+                    tl[P*tlpitch + tlcount[P]++] = R;
+#endif
+
+                    // @NOTE: If still intersects, add to intersecting list.
+                    int ELR = delaunay_edge(adj, L, R);
+                    if (line_segments_intersect(positions[vi], positions[vj], positions[P], positions[V3])) {
+                        ie[iehi][0] = L;
+                        ie[iehi][1] = ELR;
+                        iehi = (iehi+1)%ielen;
+                    } else {
+                        // @NOTE: If not, place it on a list of newly created edges.
+                        ne[nehi][0] = L;
+                        ne[nehi][1] = ELR;
+                        nehi = (nehi+1)%nelen;
+                    }
+                }
+            }
+
+            // @NOTE: Iterate over newly created edges.
+            while (nelo != nehi) {
+                int L = ne[nelo][0];
+                int v = ne[nelo][1];
+                nelo = (nelo+1)%nelen;
+
+                int vk = tri[L][v];
+                int vl = tri[L][(v+1)%3];
+
+                int R = adj[L][v];
+
+                int ERL = delaunay_edge(adj, R, L);
+                int ERA = (ERL+1)%3;
+                int ERB = (ERL+2)%3;
+
+                int V2 = tri[L][v];
+                int V1 = tri[L][(v+1)%3];
+                int P = tri[L][(v+2)%3];
+                int V3 = tri[R][(ERL+2)%3];
+
+                float xp = positions[P].x;
+                float x1 = positions[V1].x;
+                float x2 = positions[V2].x;
+                float x3 = positions[V3].x;
+
+                float yp = positions[P].y;
+                float y1 = positions[V1].y;
+                float y2 = positions[V2].y;
+                float y3 = positions[V3].y;
+
+                // @NOTE: If it's constrained edge, skip.
+                if ((vk==vi && vl==vj) || (vk==vj && vl==vi)) {
+                    continue;
+                }
+
+                // @NOTE: If delaunay-bad, swap.
+                if (delaunay_bad(xp,x1,x2,x3,yp,y1,y2,y3)) {
+                    int A = adj[R][ERA];
+                    int B = adj[R][ERB];
+                    int C = adj[L][(v+1)%3];
+                    int D = adj[L][(v+2)%3];
+
+                    // Update vertex and adjacency list for L.
+                    int ELD = delaunay_edge(adj, L, D);
+                    tri[L][ELD] = P;
+                    tri[L][(ELD+1)%3] = V2;
+                    tri[L][(ELD+2)%3] = V3;
+                    adj[L][ELD] = D;
+                    adj[L][(ELD+1)%3] = A;
+                    adj[L][(ELD+2)%3] = R;
+
+                    // Update vertex and adjacency list for R.
+                    int ERB = delaunay_edge(adj, R, B);
+                    tri[R][ERB] = V3;
+                    tri[R][(ERB+1)%3] = V1;
+                    tri[R][(ERB+2)%3] = P;
+                    adj[R][ERB] = B;
+                    adj[R][(ERB+1)%3] = C;
+                    adj[R][(ERB+2)%3] = L;
+
+                    // Update adjacency lists for triangle A and C.
+                    if (A >= 0) {
+                        int EAR = delaunay_edge(adj, A, R);
+                        adj[A][EAR] = L;
+                    }
+                    if (C >= 0) {
+                        int ECL = delaunay_edge(adj, C, L);
+                        adj[C][ECL] = R;
+                    }
+
+                    // @NOTE: No need to update triangle-list since it isn't used afterwards.
+                }
             }
         }
     }
@@ -579,7 +858,6 @@ delaunay_triangulate(Vertex *vertices, unsigned int vertexcount, int (*edges)[2]
         }
     }
 
-
  
     // @NOTE: Remap to original value.
     //count-=3;
@@ -606,7 +884,8 @@ void generate_vertices(Vertex *vertices, u32 count) {
         }
         vertices[i].position.y = 0.0f;
     }
-#else
+#endif
+#if 0
     vertices[0].position = v3{1,0,1};
     vertices[1].position = v3{3,0,4};
     vertices[2].position = v3{-2,0,3};
@@ -614,6 +893,15 @@ void generate_vertices(Vertex *vertices, u32 count) {
     vertices[4].position = v3{-1,0,-1};
     vertices[5].position = v3{-2,0,-3};
     vertices[6].position = v3{4,0,-2};
+#endif
+#if 1
+    vertices[0].position={0.0f,  0, 0.0f};
+    vertices[1].position={-0.2f, 0, 0.1f};
+    vertices[2].position={-0.8f, 0, -0.2f};
+    vertices[3].position={-0.8f, 0, -0.5f};
+    vertices[4].position={-0.3f, 0, 0.1f};
+    vertices[5].position={ 0.7f, 0, -0.1f};
+    vertices[6].position={ 0.7f, 0, -0.0f};
 #endif
 }
 
@@ -688,7 +976,11 @@ int main(void) {
     Vertex_Array triangulated;
     restart(vertices, vertexcount, &hull, &triangulated);
 
-    Delaunay_Triangulate_Result dln_result = delaunay_triangulate(vertices, vertexcount, 0, 0);
+    const int edgecount = 1;
+    int edges[edgecount][2];
+    edges[0][0] = 2;
+    edges[0][1] = 6;
+    Delaunay_Triangulate_Result dln_result = delaunay_triangulate(vertices, vertexcount, edges, edgecount);
 
     bool drawconvexhull = false;
     bool drawtriangulatedconvexhull = false;
@@ -696,6 +988,7 @@ int main(void) {
     float scale = 0.15f;
     GLuint circleshader_scale = glad_glGetUniformLocation(circleshader, "scale");
     GLuint simpleshader_scale = glad_glGetUniformLocation(simpleshader, "scale");
+    GLuint simpleshader_color = glad_glGetUniformLocation(simpleshader, "color");
 
     {
         glEnable(GL_DEPTH_TEST);
@@ -720,8 +1013,9 @@ int main(void) {
             ImGui::Begin("Control");
             ImGui::Checkbox("Draw Convex Hull", &drawconvexhull);
             ImGui::Checkbox("Draw Triangulated Convex Hull", &drawtriangulatedconvexhull);
-            ImGui::Checkbox("Draw Delaunay Triangulation", &drawdelaunay);
+            ImGui::Checkbox("Draw Constrained Delaunay Triangulation", &drawdelaunay);
             ImGui::DragFloat("Scale", &scale, 0.01f, 0.001f, 100.0f);
+#if 1
             if (ImGui::Button("Restart")) {
                 free(vertices);
                 vertices = (Vertex *)malloc(sizeof(Vertex) * vertexcount);
@@ -729,8 +1023,9 @@ int main(void) {
 
                 free(dln_result.tri);
                 free(dln_result.adj);
-                dln_result = delaunay_triangulate(vertices, vertexcount, 0, 0);
+                dln_result = delaunay_triangulate(vertices, vertexcount, edges, edgecount);
             }
+#endif
             ImGui::End();
         }
         ImGui::Render();
@@ -754,6 +1049,7 @@ int main(void) {
         if (drawconvexhull) {
             glUseProgram(simpleshader);
             glUniform1f(simpleshader_scale, scale);
+            glUniform4f(simpleshader_color, 1.0f, 1.0f, 0.0f, 1.0f);
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, hull.count * sizeof(Vertex), hull.vertices, GL_DYNAMIC_DRAW);
@@ -764,6 +1060,7 @@ int main(void) {
         if (drawtriangulatedconvexhull) {
             glUseProgram(simpleshader);
             glUniform1f(simpleshader_scale, scale);
+            glUniform4f(simpleshader_color, 1.0f, 1.0f, 0.0f, 1.0f);
             glEnableVertexAttribArray(0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
@@ -776,12 +1073,18 @@ int main(void) {
         if (drawdelaunay) {
             glUseProgram(simpleshader);
             glUniform1f(simpleshader_scale, scale);
+            glUniform4f(simpleshader_color, 1.0f, 1.0f, 0.0f, 1.0f);
             glEnableVertexAttribArray(0);
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
             glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(Vertex), (GLvoid *)(offsetof(Vertex, position)));
             glBufferData(GL_ARRAY_BUFFER, vertexcount * sizeof(Vertex), vertices, GL_DYNAMIC_DRAW);
             glBufferData(GL_ELEMENT_ARRAY_BUFFER, dln_result.numtri*3 * sizeof(int), dln_result.tri, GL_DYNAMIC_DRAW);
             glDrawElements(GL_TRIANGLES, dln_result.numtri*3, GL_UNSIGNED_INT, (void *)0);
+            if (edges && edgecount) {
+                glUniform4f(simpleshader_color, 1.0f, 0.0f, 1.0f, 1.0f);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, edgecount*2 * sizeof(int), edges, GL_DYNAMIC_DRAW);
+                glDrawElements(GL_LINES, edgecount*2, GL_UNSIGNED_INT, (void *)0);
+            }
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
             glDisableVertexAttribArray(0);
         }
